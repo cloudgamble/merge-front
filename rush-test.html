@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>Front Rush balance test</title></head>
+<body>
+<canvas id="game" style="display:none"></canvas>
+<pre id="out">running…</pre>
+<script>localStorage.removeItem('frontrush.v1');</script>
+<script src="rush.js"></script>
+<script>
+// Bots play real runs through the game's own update loop.
+// ?runs=N  ?level=L  ?diff=D  ?mode=M  ?up=troops,dmg,rate,loot  plus any BAL key to override.
+const R = window.FrontRush, q = new URLSearchParams(location.search), out = [];
+for (const [k, v] of q) if (k in R.BAL) R.BAL[k] = +v;
+const runs = +(q.get('runs') || 5);
+// up=troops,dmg,rate,loot[,armor,boss,crate]
+const ups = (q.get('up') || '0,0,0,0').split(',').map(Number);
+const up = { troops: ups[0] || 0, dmg: ups[1] || 0, rate: ups[2] || 0, loot: ups[3] || 0, armor: ups[4] || 0, boss: ups[5] || 0, crate: ups[6] || 0 };
+const cases = q.get('level') !== null
+  ? [[+q.get('level'), +(q.get('diff') || 1), +(q.get('mode') || 0)]]
+  : [[0, 0, 0], [0, 1, 0], [0, 2, 0], [0, 1, 1], [1, 1, 0], [2, 1, 0]];
+const t0 = performance.now();
+try {
+  for (const bot of ['smart', 'random']) {
+    for (const [level, diff, modeIdx] of cases) {
+      const res = [];
+      for (let i = 0; i < runs; i++) res.push(R.simulate({ level, diff, modeIdx, up, bot }));
+      const waves = res.map(r => r.wave).sort((a, b) => a - b);
+      const wins = res.filter(r => r.result === 'victory').length;
+      const avgT = Math.round(res.reduce((s, r) => s + r.time, 0) / res.length);
+      const avgC = Math.round(res.reduce((s, r) => s + r.coins, 0) / res.length);
+      out.push(`${bot.padEnd(6)} LV${level + 1} ${R.DIFFS[diff].name.padEnd(6)} ${R.MODES[modeIdx].name.padEnd(9)} waves=[${waves.join(',')}] clears=${wins}/${runs} avgTime=${avgT}s avgCoins=${avgC} maxN=${Math.max(...res.map(r => r.N))} tier=${Math.max(...res.map(r => r.tier))}`);
+    }
+  }
+} catch (e) { out.push('ERROR: ' + e.stack); }
+out.push(`up=${JSON.stringify(up)} elapsed ${(performance.now() - t0).toFixed(0)}ms`);
+document.getElementById('out').textContent = out.join('\n');
+</script>
+</body>
+</html>

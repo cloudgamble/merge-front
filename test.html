@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>Merge Front balance test</title></head>
+<body>
+<canvas id="game" style="display:none"></canvas>
+<pre id="out">running…</pre>
+<script>localStorage.removeItem('mergefront.v1');</script>
+<script src="game.js"></script>
+<script>
+// A simple bot: buys counters to the enemy's dominant types, auto-merges, sells clutter, fights.
+const M = window.MergeFront;
+const lines = [];
+const log = s => lines.push(s);
+
+function autoMerge(grid) {
+  for (;;) {
+    let done = true;
+    outer: for (let i = 0; i < M.N_CELLS; i++) for (let j = i + 1; j < M.N_CELLS; j++) {
+      const a = grid[i], b = grid[j];
+      if (a && b && a.type === b.type && a.level === b.level) {
+        grid[i] = { type: a.type, level: a.level + 1 }; grid[j] = null; done = false; break outer;
+      }
+    }
+    if (done) return;
+  }
+}
+function arrange(grid) {
+  const units = grid.filter(Boolean).sort((a, b) => b.level - a.level);
+  const g = Array(M.N_CELLS).fill(null);
+  for (const u of units) g[M.freeCellFor(g, M.ROW_PREF[u.type])] = u;
+  return g;
+}
+function valueByType(grid) {
+  const v = { inf: 0, tank: 0, air: 0 };
+  for (const u of grid) if (u) v[u.type] += M.unitValue(u.level);
+  return v;
+}
+
+function run(maxStages, strategy) {
+  log(`--- ${strategy} bot ---`);
+  let stage = 1, coins = 300, attempts = 0, losses = 0, stuck = 0;
+  let grid = Array(M.N_CELLS).fill(null);
+  grid[1] = { type: 'inf', level: 1 }; grid[3] = { type: 'inf', level: 1 };
+  const timeouts = [];
+  const lossesAt = {};
+  while (stage <= maxStages && attempts < 600) {
+    const enemy = M.genEnemy(stage);
+    const ev = valueByType(enemy.grid);
+    for (let guard = 0; guard < 500; guard++) {
+      autoMerge(grid);
+      const price = M.buyPrice(stage), L = M.buyLevel(stage);
+      if (coins < price) break;
+      if (!grid.some(u => !u)) {
+        // Board full: sell the weakest unit if it's below the shop level.
+        let wi = -1;
+        grid.forEach((u, i) => { if (u && u.level < L && (wi < 0 || u.level < grid[wi].level)) wi = i; });
+        if (wi < 0) break;
+        coins += M.sellPrice(grid[wi]); grid[wi] = null;
+        continue;
+      }
+      const own = valueByType(grid);
+      const pick = strategy === 'random' ? ['inf', 'tank', 'air'][Math.floor(Math.random() * 3)]
+        : Object.keys(M.TYPES).reduce((best, t) => {
+          const need = (ev[M.BEATS[t]] + 1) / (own[t] + 1);
+          return need > best.need ? { t, need } : best;
+        }, { t: 'inf', need: -1 }).t;
+      grid[grid.findIndex(u => !u)] = { type: pick, level: L };
+      coins -= price;
+    }
+    autoMerge(grid);
+    grid = arrange(grid);
+    const res = M.simulate(grid, enemy.grid);
+    attempts++;
+    if (res.outcome === 'timeout') timeouts.push(stage);
+    if (res.outcome === 'win') {
+      lossesAt[stage] = stuck;
+      coins += M.reward(stage);
+      const levels = grid.filter(Boolean).map(u => u.level);
+      if (VERBOSE) log(`stage ${String(stage).padStart(2)} WIN  t=${res.time.toFixed(1).padStart(5)}s  units=${String(levels.length).padStart(2)} maxLv=${Math.max(...levels)}  enemy=${enemy.grid.filter(Boolean).length} (${enemy.name})  shopLv=${M.buyLevel(stage)}`);
+      stage++; stuck = 0;
+    } else {
+      losses++; stuck++;
+      coins += Math.round(M.reward(stage) * 0.25);
+      if (VERBOSE) log(`stage ${String(stage).padStart(2)} ${res.outcome.toUpperCase()} t=${res.time.toFixed(1)}s (retry ${stuck})`);
+    }
+  }
+  const hard = Object.entries(lossesAt).filter(([, n]) => n > 0).map(([s, n]) => `${s}:${n}`).join(' ');
+  log(`reached stage ${stage}, attempts ${attempts}, losses ${losses}, timeouts ${timeouts.length ? timeouts.join(',') : 'none'}\n  retries per stage: ${hard || 'none'}`);
+}
+
+const VERBOSE = location.hash === '#v';
+const t0 = performance.now();
+const params = new URLSearchParams(location.search);
+for (const [k, v] of params) if (k in M.BAL) M.BAL[k] = +v;
+log('BAL ' + JSON.stringify(M.BAL));
+try { run(40, 'smart'); for (let k = 0; k < 4; k++) run(40, 'random'); } catch (e) { log('ERROR: ' + e.stack); }
+log(`elapsed ${(performance.now() - t0).toFixed(0)}ms`);
+document.getElementById('out').textContent = lines.join('\n');
+</script>
+</body>
+</html>

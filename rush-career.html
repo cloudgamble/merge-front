@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>Front Rush career sim</title></head>
+<body>
+<canvas id="game" style="display:none"></canvas>
+<pre id="out">running…</pre>
+<script>localStorage.removeItem('frontrush.v1');</script>
+<script src="rush.js"></script>
+<script>
+// A bot plays a whole career from zero: it attacks the easiest uncleared level/difficulty it has
+// unlocked, farms its best-paying cleared setting after failures, and spends coins as it goes.
+// Goal rewards and daily prizes are ignored, so real progress should be a bit faster than this.
+// ?runs=N caps the career length.
+const R = window.FrontRush, q = new URLSearchParams(location.search), out = [];
+const MAX_RUNS = +(q.get('runs') || 900);
+for (const [k, v] of q) if (k in R.BAL) R.BAL[k] = +v;
+out.push('BAL overrides: ' + JSON.stringify(Object.fromEntries([...q].filter(([k]) => k in R.BAL))));
+const NL = R.LEVELS.length, ND = R.DIFFS.length;
+const up = Object.fromEntries(R.UPGRADES.map(u => [u.key, 0]));
+const cost = k => R.UPGRADES.find(u => u.key === k).cost(up[k]);
+const weight = { dmg: 1, rate: 1, armor: 1.3, boss: 1.6, loot: 1.5, crate: 3, troops: 2 };
+const cleared = Array(NL).fill(-1), unlocked = [true, ...Array(NL - 1).fill(false)];
+const open = (L, d) => unlocked[L] && (d <= 2 || cleared[L] >= d - 1);
+const combos = [];
+for (let L = 0; L < NL; L++) for (let d = 1; d < ND; d++) combos.push({ L, d, enemy: R.LEVELS[L].mult * R.DIFFS[d].enemy, coin: R.LEVELS[L].coins * R.DIFFS[d].coins });
+combos.sort((a, b) => a.enemy - b.enemy);
+let coins = 0, time = 0, runs = 0, fails = 0;
+const label = c => `LV${c.L + 1} ${R.DIFFS[c.d].name}`;
+const ups = () => `dmg ${up.dmg} rate ${up.rate} armor ${up.armor} boss ${up.boss} loot ${up.loot}`;
+function buy() {
+  for (;;) {
+    let best = null;
+    for (const k of Object.keys(weight)) {
+      if (k === 'troops' && up.troops >= 5) continue;
+      const c = cost(k) * weight[k];
+      if (!best || c < best.c) best = { k, c, real: cost(k) };
+    }
+    if (best.real > coins) return;
+    coins -= best.real;
+    up[best.k]++;
+  }
+}
+function play(c) {
+  const res = R.simulate({ level: c.L, diff: c.d, modeIdx: 0, up });
+  runs++; time += res.time; coins += res.coins;
+  return res.result === 'victory';
+}
+const notable = new Set(['LV1 NORMAL', 'LV3 NORMAL', 'LV6 NORMAL', 'LV6 HARD', 'LV9 NORMAL', 'LV12 NORMAL', 'LV12 HARD', 'LV1 BRUTAL', 'LV1 INFERNO', 'LV6 BRUTAL', 'LV6 INFERNO', 'LV12 BRUTAL', 'LV12 NIGHTMARE', 'LV12 INFERNO']);
+const t0 = performance.now();
+try {
+  while (runs < MAX_RUNS) {
+    const frontier = combos.find(c => open(c.L, c.d) && cleared[c.L] < c.d);
+    if (!frontier) { out.push('*** everything cleared ***'); break; }
+    if (play(frontier)) {
+      cleared[frontier.L] = Math.max(cleared[frontier.L], frontier.d);
+      if (frontier.L + 1 < NL) unlocked[frontier.L + 1] = true;
+      fails = 0;
+      const tag = label(frontier);
+      if (notable.has(tag)) out.push(`${tag.padEnd(15)} cleared after ${String(runs).padStart(4)} runs, ${(time / 3600).toFixed(1).padStart(5)} h of play   [${ups()}]`);
+    } else if (++fails >= 2) {
+      const farm = combos.filter(c => cleared[c.L] >= c.d).sort((a, b) => b.coin - a.coin)[0];
+      if (farm) { play(farm); play(farm); }
+      fails = 0;
+    }
+    buy();
+  }
+} catch (e) { out.push('ERROR ' + e.stack); }
+const front = combos.find(c => open(c.L, c.d) && cleared[c.L] < c.d);
+out.push(`\nafter ${runs} runs (${(time / 3600).toFixed(1)} h): next target ${front ? label(front) : 'none'}, coins ${Math.round(coins)}`);
+out.push(`final upgrades: ${ups()}`);
+out.push(`sim took ${((performance.now() - t0) / 1000).toFixed(0)} s`);
+document.getElementById('out').textContent = out.join('\n');
+</script>
+</body>
+</html>
